@@ -254,5 +254,94 @@ def do_convert(given=None):
 
     _pause()
 
+def _convert_image(src, dst, fmt):
+    from PIL import Image
+    img = Image.open(src)
+
+    if fmt in ("jpg", "jpeg"):
+        if img.mode in ("RGBA", "P", "LA"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            mask = img.split()[-1] if img.mode in ("RGBA", "LA") else None
+            bg.paste(img, mask=mask)
+            img = bg
+        else:
+            img = img.convert("RGB")
+    elif fmt not in ("png", "gif", "ico", "tiff", "tif", "bmp", "webp", "avif"):
+        img = img.convert("RGB")
+
+    kw = {}
+    if fmt == "webp":
+        kw = {"quality": 90, "method": 6}
+    elif fmt in ("jpg", "jpeg"):
+        kw = {"quality": 95, "optimize": True}
+    elif fmt == "png":
+        kw = {"optimize": True}
+    img.save(dst, **kw)
+
+def _convert_media(src, dst, fmt, src_type):
+    if not require_dep("ffmpeg", "brew install ffmpeg  /  sudo apt install ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    
+    # video --> gif special exc.
+    if fmt == "gif":
+        palette = dst.with_suffix(".palette.png")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-i", str(palette), "-lavfi",
+             "fps=15,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse", str(dst)],
+             capture_output=True, check=True)
+        palette.unlink(missing_ok=True)
+        return
+    
+    # these args are AI-gen :3
+    audio_args = {
+        "mp3":  ["-c:a", "libmp3lame", "-q:a", "0"],
+        "aac":  ["-c:a", "aac",        "-b:a", "192k"],
+        "flac": ["-c:a", "flac"],
+        "wav":  ["-c:a", "pcm_s16le"],
+        "opus": ["-c:a", "libopus",    "-b:a", "128k"],
+        "ogg":  ["-c:a", "libvorbis",  "-q:a", "6"],
+        "m4a":  ["-c:a", "aac",        "-b:a", "192k",
+                 "-movflags", "+faststart"],
+    }
+    video_args = {
+        "mp4":  ["-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                 "-c:a", "aac",     "-b:a", "192k", "-movflags", "+faststart"],
+        "mkv":  ["-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                 "-c:a", "aac"],
+        "webm": ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
+                 "-c:a", "libopus"],
+        "avi":  ["-c:v", "libx264", "-crf", "18", "-c:a", "mp3"],
+        "mov":  ["-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                 "-c:a", "aac"],
+    }
+
+    cmd = ["ffmpeg", "-y", "-i", str(src)]
+    if fmt in audio_args:
+        if src_type == "video":
+            cmd.append("-vn")
+        cmd += audio_args[fmt]
+    elif fmt in video_args:
+        cmd += video_args[fmt]
+    cmd.append(str(dst))
+
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode()[-500:])
+
+def _convert_doc(src, dst):
+    if not require_dep("pandoc", "brew install pandoc  /  sudo apt install pandoc"):
+        raise RuntimeError("pandoc not found")
+    
+    r = subprocess.run(["pandoc", str(src), "-o", str(dst)], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode()[-500:])
+    
+# transcribe a/v to text!
+
+
+
+
 if __name__ == "__main__":
     main()
