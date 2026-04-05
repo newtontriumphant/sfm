@@ -563,7 +563,162 @@ def _compress_audio(src, dst, params):
     if r.returncode != 0:
         raise RuntimeError(r.stderr.decode()[-500:])
     
-# now i needa come up with another function help
+# ah yes! paywall bypasser & readability!
+
+def do_readable(url=None):
+    out()
+    out(bold("  -- Readable --"))
+    out(dim("  strips ads, paywalls, and noise from any link!"))
+    out()
+
+    if not url:
+        try:
+            url = input(magenta("  paste url! --> ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+    if not urn:
+        return
+    
+    try:
+        import trafilatura
+    except ImportError:
+        out(red("  x missing dependency!!"))
+        out(dim("    pip install trafilatura"))
+        _pause()
+        return
+    
+    try:
+        import requests
+    except ImportError:
+        out(red("  x missing dependency!!"))
+        out(dim("    pip install requests"))
+        _pause()
+        return
+    
+    out(cyan("  --> fetching..."))
+    text = title = None
+
+    # first try
+    try:
+        dl = trafilatura.fetch_url(url)
+        if dl:
+            text = trafilatura.extract(
+                dl, include_comments=False, include_tables=True,
+                no_fallback=False, favor_precision=True)
+            meta = trafilatura.extract_metadata(dl)
+            if meta:
+                title = meta.title
+            if text and len(text.strip()) < 200:
+                text = None
+    except Exception:
+        pass
+    
+    # pass 2 googlebot
+
+    if not text:
+        out(dim("  --> trying googlebot!"))
+        try:
+            r = requests.get(url, headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; Googlebot/2.1; "
+                    " +http://www.google.com/bot.html)"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+            }, timeout=15)
+
+            if r.ok:
+                text = trafilatura.extract(r.text, favor_precision=True)
+                if text and len(text.strip()) < 200:
+                    text = None
+                if not title:
+                    meta = trafilatura.extract_metadata(r.text)
+                    if meta:
+                        title = meta.title
+        except Exception:
+            pass
+    
+    # pass 3 12ft
+
+    if not text:
+        out(dim("  --> trying 12ft proxy!"))
+        try:
+            r = requests.get(f"https://12ft.io/proxy?q={url}",
+                             headers={"User-Agent": "Mozilla/5.0"},
+                             timeout=15)
+            if r.ok:
+                text = trafilatura.extract(r.text, favor_precision=True)
+                if text and len(text.strip()) < 200:
+                    text = None
+        except Exception:
+            pass
+
+    # final pass, archive.ph
+
+    if not text:
+        out(dim("  --> trying archive.ph!"))
+        try:
+            r = requests.get(
+                f"https://archive.ph/newest/{url}",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=20, allow_redirects=True)
+            if r.ok:
+                text = trafilatura.extract(r.text, favor_precision=True)
+                if text and len(text.strip()) < 200:
+                    text = None
+        except Exception:
+            pass
+
+    if not text:
+        out(red("  x could not extract readable content."))
+        out(dim("    heavy JS rendering or aggressive DRM may be blocking this."))
+        _pause()
+        return
+
+    words = len(text.split())
+    mins  = max(1, words // 200)
+
+    out(green(f"  ✓ extracted  ({words:,} words · ~{mins} min read)!"))
+    if title:
+        out(dim(f"  title: {title}"))
+    out()
+    out(dim("  -" * 30))
+    out()
+
+    for para in text.split("\n"):
+        if para.strip():
+            out(textwrap.fill(
+                para.strip(), width=72,
+                initial_indent="  ", subsequent_indent="  "))
+        else:
+            out()
+    out()
+    out(dim("  -" * 30))
+    out()
+    out(f"  {bold('s.')} Save to .txt    {bold('enter.')} Back")
+    out()
+
+    try:
+        act = input(cyan("  --> ")).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    
+    if act == "s":
+        safe = re.sub(r"[^\w\s-]", "", title or url)[:60].strip().replace(" ", "_")
+        op = unique_path(Path.cwd() / f"{safe or 'article'}.txt")
+        header = f"{title}\n{'=' * len(title)}\n\n" if title else ""
+        op.write_text(header + text, encoding="utf-8")
+        out(green(f"  ✓ saved → {op.name}"))
+
+    _pause()
+
+# finally done. ANYWAYS, MAIN MENU NEXT!
+
+def main_menu():
+    while True:
+        clear_screen()
+
+def main():
+    main_menu()
 
 if __name__ == "__main__":
     main()
