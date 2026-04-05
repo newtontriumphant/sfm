@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from py_compile import main
 import sys
 import os
 import re
@@ -25,7 +24,7 @@ GROQ_MODEL   = "whisper-large-v3"
 SUPPORTS_COLOR = (
     hasattr(sys.stdout, "isatty")
     and sys.stdout.isatty()
-    and os.environ.get("NO_COLOR") is None\
+    and os.environ.get("NO_COLOR") is None
 )
 def _c(code, t): return f"\033[{code}m{t}\033[0m" if SUPPORTS_COLOR else t
 def bold(t): return _c("1", t)
@@ -34,7 +33,7 @@ def green(t): return _c("32", t)
 def cyan(t): return _c("36", t)
 def yellow(t): return _c("33", t)
 def red(t): return _c("31", t)
-def magenta(t): return _c("35", t)
+def magenta(t): return _c("32", t) # intentionally remapping to green
 def out(*a, **k): print(*a, **k, flush=True)
 
 LOGO = r"""
@@ -117,7 +116,7 @@ def unique_path(p):
         return p
     stem, suffix, i = p.stem, p.suffix, 1
     while True:
-        c = p.with_name(f"{stem}_({i}){suffix}")
+        c = p.with_name(f"{stem}_{i}{suffix}")
         if not c.exists():
             return c
         i += 1
@@ -211,7 +210,7 @@ def do_convert(given=None):
     
     ftype = detect_type(path)
     if ftype == "unknown":
-        out(red("  x could not detect file type: {path.suffix}!"))
+        out(red(f"  x could not detect file type: {path.suffix}!"))
         _pause()
         return
     
@@ -225,6 +224,11 @@ def do_convert(given=None):
     for i, fmt in enumerate(targets, 1):
         out(f"    {dim(str(i)+'.')} {fmt}")
     out()
+
+    try:
+        choice = input(cyan("  --> ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        return
 
     try:
         idx = int(choice) - 1
@@ -289,9 +293,13 @@ def _convert_media(src, dst, fmt, src_type):
     if fmt == "gif":
         palette = dst.with_suffix(".palette.png")
         subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-vf",
+             "fps=15,scale=480:-1:flags=lanczos,palettegen", str(palette)],
+            capture_output=True, check=True)
+        subprocess.run(
             ["ffmpeg", "-y", "-i", str(src), "-i", str(palette), "-lavfi",
              "fps=15,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse", str(dst)],
-             capture_output=True, check=True)
+            capture_output=True, check=True)
         palette.unlink(missing_ok=True)
         return
     
@@ -454,7 +462,7 @@ def do_compress(given=None):
     
     ftype = detect_type(path)
     if ftype not in COMPRESS_PRESETS:
-        out(red("  x compression not supported for {ftype} files, sorry!"))
+        out(red(f"  x compression not supported for {ftype} files, sorry!"))
         _pause()
         return
     
@@ -531,6 +539,8 @@ def _compress_image(src, dst, params):
         img.save(dst, quality=q, optimize=True)
     elif fmt == "webp":
         img.save(dst, quality=q, method=6)
+    elif fmt == "png":
+        img.save(dst, optimize=True)
     else:
         img.save(dst, quality=q)
 
@@ -576,7 +586,7 @@ def do_readable(url=None):
             url = input(magenta("  paste url! --> ")).strip()
         except (EOFError, KeyboardInterrupt):
             return
-    if not urn:
+    if not url:
         return
     
     try:
@@ -621,7 +631,7 @@ def do_readable(url=None):
             r = requests.get(url, headers={
                 "User-Agent": (
                     "Mozilla/5.0 (compatible; Googlebot/2.1; "
-                    " +http://www.google.com/bot.html)"
+                    "+http://www.google.com/bot.html)"
                 ),
                 "Accept": "text/html,application/xhtml+xml",
             }, timeout=15)
@@ -711,13 +721,95 @@ def do_readable(url=None):
 
     _pause()
 
-# finally done. ANYWAYS, MAIN MENU NEXT!
+# MAIN MENU!
+
+def _dispatch_file(path):
+    """Auto-route a dropped file to the most relevant action sub-menu!"""
+    ftype = detect_type(path)
+    size_kb = path.stat().st_size // 1024
+    out()
+    out(cyan(f"  {path.name}  ({ftype} * {size_kb:,} KB)"))
+    out()
+
+    menus = {
+        "image": [("Remove Background", do_remove_bg),
+                  ("Convert",           do_convert),
+                  ("Compress",          do_compress)],
+        "audio": [("Convert",           do_convert),
+                  ("Transcribe",        do_transcribe),
+                  ("Compress",          do_compress)],
+        "video": [("Convert",           do_convert),
+                  ("Transcribe",        do_transcribe),
+                  ("Compress",          do_compress)],
+        "doc":   [("Convert",           do_convert)],
+    }
+    opts = menus.get(ftype)
+    if not opts:
+        out(red(f"  x no actions available for {ftype} files!"))
+        _pause()
+        return
+    
+    for i, (label, _) in enumerate(opts, 1):
+        out(f"  {bold(str(i) + '.')} {label}")
+    out(f"  {bold('b.')} Back")
+    out()
+
+    try:
+        choice = input(cyan("  --> ")).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if choice in ("b", "back"):
+        return
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(opts):
+            opts[idx][1](given=path)
+    except ValueError:
+        out(red("  x invalid choice!"))
+        _pause()
 
 def main_menu():
     while True:
         clear_screen()
+        out(green(LOGO))
+        out(f"  {bold('1.')} Remove Background")
+        out(f"  {bold('2.')} Convert")
+        out(f"  {bold('3.')} Transcribe")
+        out(f"  {bold('4.')} Compress")
+        out(f"  {bold('5.')} Make Readable")
+        out(f"  {bold('q.')} Quit")
+        out()
+        out(dim("  or paste a file / url directly :3"))
+        out()
+
+        try:
+            raw = input(cyan("  --> ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            out()
+            break
+
+        rl = raw.lower()
+        if   rl == "1": do_remove_bg()
+        elif rl == "2": do_convert()
+        elif rl == "3": do_transcribe()
+        elif rl == "4": do_compress()
+        elif rl == "5": do_readable()
+        elif rl in ("q", "quit", "exit"): break
+        elif (raw.startswith("http://") or raw.startswith("https://")
+              or raw.startswith("www.")):
+            do_readable(url=raw)
+        else:
+            p = Path(raw.strip("'\"")).expanduser().resolve()
+            if p.exists() and p.is_file():
+                _dispatch_file(p)
+            else:
+                out(red("  ✗ invalid input."))
+                _pause()
 
 def main():
+    signal.signal(signal.SIGINT, lambda *_: (print(), sys.exit(0)))
     main_menu()
 
 if __name__ == "__main__":

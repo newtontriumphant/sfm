@@ -1,0 +1,8 @@
+# install separately:
+#   ffmpeg  → brew install ffmpeg  /  sudo apt install ffmpeg
+#   pandoc  → brew install pandoc  /  sudo apt install pandoc
+
+Pillow>=11.0.0
+rembg>=2.0.74
+requests>=2.33.1
+trafilatura>=2.0.0
