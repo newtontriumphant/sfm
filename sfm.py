@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+from py_compile import main
 import sys
 import os
 import re
@@ -340,8 +341,229 @@ def _convert_doc(src, dst):
     
 # transcribe a/v to text!
 
+def do_transcribe(given=None):
+    out()
+    out(bold("  -- Transcribe --"))
+    out()
 
+    path = ask_file(given=given)
+    if not path:
+        return
+    
+    ftype = detect_type(path)
+    if ftype not in ("audio", "video"):
+        out(red("  x not an audio/video file!"))
+        _pause()
+        return
 
+    try:
+        import requests
+    except ImportError:
+        out(red("  x missing dependency!!"))
+        out(dim("    pip install requests"))
+        _pause()
+        return
+    
+    temp_audio = None
+    upload_path = path
+
+    if ftype == "video":
+        if not require_dep("ffmpeg", "brew install ffmpeg  /  sudo apt install ffmpeg"):
+            _pause()
+            return
+        out(cyan("  --> gooning and extracting audio..."))
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        tmp.close()
+        temp_audio = Path(tmp.name)
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(path), "-vn",
+             "-c:a", "libmp3lame", "-q:a", "4", str(temp_audio)],
+             capture_output=True)
+        if r.returncode != 0:
+            out(red("  x failed to extract audio!"))
+            temp_audio.unlink(missing_ok=True)
+            _pause()
+            return
+        upload_path = temp_audio
+
+    try:
+        size_kb = upload_path.stat().st_size // 1024
+        out(cyan(f"  --> uploading to groq! file size: ({size_kb:,} KB)..."))
+
+        with open(upload_path, "rb") as f:
+            resp = requests.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (upload_path.name, f, "audio/mpeg")},
+                data={"model": GROQ_MODEL, "response_format": "text"},
+                timeout=180,
+            )
+        resp.raise_for_status()
+        transcript = resp.text.strip()
+
+        words = len(transcript.split())
+        out(green(f"  ✓ transcription complete! word count: {words}"))
+        out()
+        out(dim("  -" * 30))
+        out()
+        for line in transcript.split("\n"):
+            if line.strip():
+                out(textwrap.fill(line.strip(), width=70,
+                                    initial_indent="  ",
+                                    subsequent_indent="  "))
+            else:
+                out()
+        out()
+        out(dim("  -" * 30))
+        out()
+
+        out(f"  {bold('s.')} Save to .txt  "
+            f"  {bold('c.')} Copy to clipboard  "
+            f"  {bold('enter.')} Back")
+        out()
+        try:
+            act = input(cyan("  --> ")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+            
+        if act == "s":
+            op = unique_path(path.with_suffix(".txt"))
+            op.write_text(transcript, encoding="utf-8")
+            out(green(f"  ✓ saved to {op.name}!"))
+        elif act == "c":
+            _copy_to_clipboard(transcript)
+
+    except Exception as e:
+        out(red(f"  x transcription failed: {e}"))
+    finally:
+        if temp_audio:
+            temp_audio.unlink(missing_ok=True)
+        
+    _pause()
+
+# compression!
+
+def do_compress(given=None):
+    out()
+    out(bold("  -- Compress --"))
+    out()
+
+    path = ask_file(given=given)
+    if not path:
+        return
+    
+    ftype = detect_type(path)
+    if ftype not in COMPRESS_PRESETS:
+        out(red("  x compression not supported for {ftype} files, sorry!"))
+        _pause()
+        return
+    
+    size_kb = path.stat().st_size // 1024
+    out()
+    out(cyan(f"  {path.name}  ({size_kb:,} KB)"))
+    out(bold("  pick a preset:"))
+    out()
+
+    presets = COMPRESS_PRESETS[ftype]
+    for i, (label, _) in enumerate(presets, 1):
+        out(f"    {dim(str(i) + '.')} {label}")
+    out()
+
+    try:
+        choice = input(cyan("  --> ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    try:
+        idx = int(choice) - 1
+    except ValueError:
+        out(red("  x invalid choice!"))
+        _pause()
+        return
+
+    if not (0 <= idx < len(presets)):
+        out(red("  x invalid choice!"))
+        _pause()
+        return
+    
+    label, params = presets[idx]
+    out(cyan(f"\n  --> compressing with preset: '{label}'..."))
+
+    try:
+        if ftype == "image":
+            op = unique_path(path.with_name(f"{path.stem}_compressed{path.suffix}"))
+            _compress_image(path, op, params)
+        elif ftype == "video":
+            op = unique_path(path.with_name(f"{path.stem}_compressed.mp4"))
+            _compress_video(path, op, params)
+        elif ftype == "audio":
+            op = unique_path(path.with_name(f"{path.stem}_compressed.mp3"))
+            _compress_audio(path, op, params)
+
+        new_kb = op.stat().st_size // 1024
+        saved_pct = int((size_kb - new_kb) / max(size_kb, 1) * 100)
+        out(green(f"  ✓ saved → {op.name}"))
+        out(dim(f"     {size_kb:,} KB → {new_kb:,} KB  (−{saved_pct}%)"))
+    except Exception as e:
+        out(red(f"  x compression failed: {e}"))
+
+    _pause()
+
+# helpers
+
+def _compress_image(src, dst, params):
+    from PIL import Image
+    img = Image.open(src)
+
+    if params.get("lossless"):
+        img.save(dst, format="PNG", optimize=True)
+        return
+    
+    if params.get("max_w") and img.width > params["max_w"]:
+        ratio = params["max_w"] / img.width
+        img = img.resize(
+            (params["max_w"], int(img.height * ratio)), Image.LANCZOS)
+
+    q = params.get("quality", 85)
+    fmt = dst.suffix.lower().lstrip(".")
+    if fmt in ("jpg", "jpeg"):
+        img = img.convert("RGB")
+        img.save(dst, quality=q, optimize=True)
+    elif fmt == "webp":
+        img.save(dst, quality=q, method=6)
+    else:
+        img.save(dst, quality=q)
+
+def _compress_video(src, dst, params):
+    if not require_dep("ffmpeg", "brew install ffmpeg  /  sudo apt install ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+
+    cmd = ["ffmpeg", "-y", "-i", str(src)]
+    if params.get("height"):
+        cmd += ["-vf", f"scale=-2:{params['height']}"]
+    cmd += [
+        "-c:v", "libx264",
+        "-crf", str(params.get("crf", 23)),
+        "-preset", "slow",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(dst),
+    ]
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode()[-500:])
+
+def _compress_audio(src, dst, params):
+    if not require_dep("ffmpeg", "brew install ffmpeg  /  sudo apt install ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src),
+         "-c:a", "libmp3lame", "-b:a", params["bitrate"], str(dst)], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode()[-500:])
+    
+# now i needa come up with another function help
 
 if __name__ == "__main__":
     main()
