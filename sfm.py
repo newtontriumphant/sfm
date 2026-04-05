@@ -108,7 +108,7 @@ def clear_screen():
     os.system("cls" if platform.system() == "Windows" else "clear")
 def _pause():
     try:
-        input(dim("\n. press enter to continue..."))
+        input(dim("\n  press enter to continue..."))
     except (EOFError, KeyboardInterrupt):
         pass
 def unique_path(p):
